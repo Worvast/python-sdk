@@ -7,6 +7,7 @@ import ssl
 import sys
 import time
 import zlib
+import threading
 from devo.common import get_stream_handler, get_log, Configuration
 from .transformsyslog import FORMAT_MY, FORMAT_MY_BYTES, \
     FACILITY_USER, SEVERITY_INFO, COMPOSE, \
@@ -97,11 +98,45 @@ class SenderConfigTCP:
 
 class SenderBuffer:
     """Micro class for buffer values"""
-    def __init__(self):
+    def __init__(self, flush_buffer=None):
         self.length = 19500
         self.compression_level = -1
         self.text_buffer = b''
         self.events = 0
+        self.last_send = None
+        self.timer_control = None
+        self.flush_buffer = flush_buffer
+        self.lock = threading.Lock()
+        self.sleep_time = 60
+
+    def set_timer(self):
+        self.update_timer()
+        self.timer_control = threading.Thread(
+            target=self.auto_flush
+        )
+        self.timer_control.setDaemon(True)
+        self.timer_control.start()
+
+    def auto_flush(self):
+        while True:
+            time.sleep(1+self.sleep_time - (time.time()-self.last_send))
+            if time.time() > self.last_send:
+                if len(self.text_buffer) == 0:
+                    break
+                self.flush_buffer()
+
+    def timer_alive(self):
+        if self.timer_control is None:
+            return False
+        return True
+
+    def timer(self):
+        if self.timer_control is None:
+            if len(self.text_buffer) > 0:
+                self.set_timer()
+
+    def update_timer(self):
+        self.last_send = time.time()
 
 
 class Sender(logging.Handler):
@@ -137,8 +172,9 @@ class Sender(logging.Handler):
         self.debug = debug
         self.socket_timeout = timeout
         self.socket_max_connection = 3600 * 1000
-        self.buffer = SenderBuffer()
+        self.buffer = SenderBuffer(flush_buffer=self.flush_buffer)
         self.logging = {}
+        self.timer = False
 
         if isinstance(config, SenderConfigSSL):
             self.__connect_ssl()
@@ -503,6 +539,9 @@ class Sender(logging.Handler):
         if len(self.buffer.text_buffer) > self.buffer.length:
             return self.flush_buffer()
 
+        if self.timer:
+            self.buffer.timer()
+
         self.buffer.events += 1
         return 0
 
@@ -512,6 +551,7 @@ class Sender(logging.Handler):
         :return: None
         """
         if self.buffer.text_buffer:
+            self.buffer.lock.acquire()
             try:
                 compressor = zlib.compressobj(self.buffer.compression_level,
                                               zlib.DEFLATED, 31)
@@ -525,6 +565,8 @@ class Sender(logging.Handler):
             finally:
                 self.buffer.text_buffer = b''
                 self.buffer.events = 0
+                self.buffer.update_timer()
+                self.buffer.lock.release()
         return 0
 
     @staticmethod

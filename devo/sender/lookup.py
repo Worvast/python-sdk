@@ -39,8 +39,8 @@ class Lookup:
     delay = 5
 
     # Tables to send lookups
-    DATA_TABLE = "my.lookup.data"
-    CONTROL_TABLE = "my.lookup.control"
+    DATA_TABLE = "my.lookup.data2"
+    CONTROL_TABLE = "my.lookup.control2"
 
     def __init__(self, name="example", historic_tag=None,
                  con=None, delay=5):
